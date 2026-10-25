@@ -1,5 +1,5 @@
 /**
- * ESP32-Network-Scanner – combined WiFi + BLE scanner
+ * ESP32-Network-Scanner – combined WiFi + BT scanner
  * for LilyGO T-Display-S3 AMOLED Plus 1.91" (536 x 240)
  *
  * Passive scanning only: reads what nearby devices already broadcast.
@@ -10,7 +10,7 @@
 #include <WiFi.h>
 #include <LilyGo_AMOLED.h>
 #include <LV_Helper.h>
-// #include <BLEDevice.h>   // uncomment when you implement the BLE scan
+// #include <BLEDevice.h>   // uncomment when you implement the BT scan (API stays BLE*)
 
 LilyGo_Class amoled;
 
@@ -18,20 +18,20 @@ LilyGo_Class amoled;
 // State
 // ===================================================================
 enum Screen { SCREEN_MODE_SELECT, SCREEN_SCAN_LIST, SCREEN_DETAIL };
-enum Mode   { MODE_WIFI, MODE_BLE };
+enum Mode   { MODE_WIFI, MODE_BT };
 
-// One record per scanned signal. WiFi fills some fields, BLE others;
+// One record per scanned signal. WiFi fills some fields, BT others;
 // leave the unused ones at a sentinel (e.g. rssi = 0, channel = -1).
 struct Signal {
-    String name;        // WiFi: SSID ("" if hidden) | BLE: device name ("" if none)
-    String address;     // WiFi: BSSID (MAC)         | BLE: device address
+    String name;        // WiFi: SSID ("" if hidden) | BT: device name ("" if none)
+    String address;     // WiFi: BSSID (MAC)         | BT: device address
     int    rssi;        // both: signal strength in dBm (negative, closer = higher)
 
     // --- WiFi only ---
     int    channel;     // 1..13
     int    encryption;  // wifi_auth_mode_t (WIFI_AUTH_OPEN, _WPA2_PSK, ...)
 
-    // --- BLE only ---
+    // --- BT only ---
     int    txPower;     // advertised TX power at 1 m, if present (else e.g. 127)
     // TODO: add fields you want on the detail page, e.g.
     //       String serviceUuids;  int appearance;  bool isConnectable;
@@ -65,10 +65,13 @@ void setup()
     WiFi.mode(WIFI_STA);    // station mode (not connected) is required to scan
     WiFi.disconnect();
 
-    // TODO (STEP 0 – input): set up the two buttons (GPIO0 and GPIO21)
-    //   pinMode(0, INPUT_PULLUP); pinMode(21, INPUT_PULLUP);
-    //   Decide a scheme, e.g. btnA = move selection, btnB = confirm,
-    //   hold btnB = back. Remember to debounce (track last state + millis).
+    // INPUT MODEL: touch = select (wired via LVGL event callbacks inside the
+    // build* screens); one physical button = BACK. No long-press needed.
+    pinMode(0, INPUT_PULLUP);
+    pinMode(21, INPUT_PULLUP);
+    // use GPIO21 as BACK (GPIO0 is also BOOT)
+    // Optional sanity check: Serial.println(amoled.hasTouch()); to confirm
+    // the touch panel was detected.
 
     goTo(SCREEN_MODE_SELECT);
 }
@@ -78,15 +81,13 @@ void loop()
     lv_task_handler();  // lets LVGL draw, keep this here
     delay(5);
 
-    // TODO (STEP 0 – input): read buttons, then act on currentScreen:
-    //   MODE_SELECT : move highlight between WiFi/BLE; confirm -> startScan()
-    //   SCAN_LIST   : move selectedIndex; confirm -> goTo(SCREEN_DETAIL)
-    //   DETAIL      : (no confirm action needed)
-    //
-    //   BACK (same button on every screen) -> goBack()
-    //   goBack() already knows the hierarchy: DETAIL->LIST->MODE_SELECT.
-    //   Suggested scheme with two buttons: btnA = move/next,
-    //   btnB short press = confirm, btnB long press (hold) = back.
+    // TODO (STEP 0 – input): selection happens through TOUCH, and LVGL calls
+    // your widget callbacks automatically, so the only thing to poll here is
+    // the BACK button:
+    //   read GPIO21 with debounced edge detection (HIGH->LOW = a press);
+    //   on a confirmed press -> goBack();
+    //   goBack() already knows the hierarchy DETAIL->LIST->MODE_SELECT.
+    // (Edge + ~30 ms debounce is still needed; long-press is not.)
 }
 
 // ===================================================================
@@ -120,12 +121,49 @@ void goBack()
 // ===================================================================
 // Screen 1 – mode select
 // ===================================================================
+void onWifiChosen(lv_event_t *e)
+{
+    startScan(MODE_WIFI);
+}
+
+void onBtChosen(lv_event_t *e)
+{
+    startScan(MODE_BT);
+}
+
 void buildModeSelect()
 {
-    // TODO: show a title and two choices (WiFi / Bluetooth).
-    //   A simple lv_list with two lv_list_add_btn entries works, or two
-    //   big lv_btn widgets side by side on the wide screen.
-    //   Highlight the current choice so the buttons have something to move.
+    //Select Label
+    lv_obj_t *title = lv_label_create(lv_scr_act());
+    lv_label_set_text(title, "Select Mode");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
+
+    //WiFi mode Button
+    lv_obj_t *wifiBtn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(wifiBtn, 260, 60);
+    lv_obj_align(wifiBtn, LV_ALIGN_TOP_MID, 0, 70);
+
+    // WiFi text label
+    lv_obj_t *wifiLabel = lv_label_create(wifiBtn);
+    lv_label_set_text(wifiLabel, "WiFi");
+    lv_obj_set_style_text_font(wifiLabel, &lv_font_montserrat_28, 0);
+    lv_obj_center(wifiLabel);
+
+    //Bluetooth mode Button
+    lv_obj_t *btBtn = lv_btn_create(lv_scr_act());
+    lv_obj_set_size(btBtn, 260, 60);
+    lv_obj_align(btBtn, LV_ALIGN_TOP_MID, 0, 145);
+
+    // Bluetooth text label
+    lv_obj_t *btLabel = lv_label_create(btBtn);
+    lv_label_set_text(btLabel, "Bluetooth");
+    lv_obj_set_style_text_font(btLabel, &lv_font_montserrat_28, 0);
+    lv_obj_center(btLabel);
+
+    // Add Button Events
+    lv_obj_add_event_cb(wifiBtn, onWifiChosen, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(btBtn,  onBtChosen,  LV_EVENT_CLICKED, NULL);
 }
 
 // Called when the user confirms a mode on the select screen.
@@ -135,11 +173,15 @@ void startScan(Mode mode)
     resultCount = 0;
     selectedIndex = 0;
 
-    // TODO: show a quick "Scanning..." label so it isn't a frozen screen
-    //       (scans block for a few seconds). Call lv_task_handler() once after.
+    //Scanning Label
+    lv_obj_t *scanning = lv_label_create(lv_scr_act());
+    lv_label_set_text(scanning, "Scanning");
+    lv_obj_set_style_text_font(scanning, &lv_font_montserrat_28, 0);
+    lv_obj_align(scanning, LV_ALIGN_BOTTOM_MID, 0, 15);
 
+    lv_timer_handler(); //force scanning label to be shown.
     if (mode == MODE_WIFI) scanWifi();
-    else                   scanBle();
+    else                   scanBt();
 
     goTo(SCREEN_SCAN_LIST);
 }
@@ -157,7 +199,7 @@ void scanWifi()
     //   WiFi.scanDelete();  resultCount = min(n, MAX_RESULTS);
 }
 
-void scanBle()
+void scanBt()
 {
     // TODO:
     //   BLEDevice::init("");
@@ -169,7 +211,7 @@ void scanBle()
     //     .haveTXPower() ? .getTXPower() : 127
     //   scan->clearResults();  resultCount = ...
     //
-    // NOTE: WiFi and BLE share one radio – only one scan runs at a time.
+    // NOTE: WiFi and BT share one radio – only one scan runs at a time.
     // Here that's fine because we scan on demand, one mode at a time.
 }
 
@@ -180,8 +222,10 @@ void buildScanList()
 {
     // TODO: make an lv_list, add one row per results[0..resultCount].
     //   Row label idea: name (or "<hidden>"/address) + RSSI, maybe a
-    //   bars glyph. Show the selected row highlighted.
-    //   If resultCount == 0, show "No signals found".
+    //   bars glyph. If resultCount == 0, show "No signals found".
+    //   Give each row an LV_EVENT_CLICKED callback that sets selectedIndex
+    //   to that row's index, then calls goTo(SCREEN_DETAIL). Pass the index
+    //   through the widget (e.g. lv_obj_set_user_data / event user_data).
 }
 
 // ===================================================================
@@ -195,11 +239,11 @@ void buildDetail(int index)
     // TODO: lay out the fields. Suggested per mode:
     //   both : name, address, RSSI, estimated distance
     //   WiFi : channel, encryption (decode encryption int -> text)
-    //   BLE  : advertised TX power, service UUIDs, connectable, ...
+    //   BT   : advertised TX power, service UUIDs, connectable, ...
     //
     // Approx distance from RSSI (log-distance path-loss model, very rough):
     //   distance_m = pow(10, (txPowerAt1m - rssi) / (10 * n))
-    //     txPowerAt1m : reference RSSI at 1 m. BLE: use s.txPower if present,
+    //     txPowerAt1m : reference RSSI at 1 m. BT: use s.txPower if present,
     //                   else ~ -59. WiFi: no standard value, pick a constant
     //                   like -40..-50 and label it "approximate".
     //     n           : path-loss exponent, ~2.0 open space .. 3-4 indoors.
@@ -207,6 +251,6 @@ void buildDetail(int index)
     //
     // Reality check on "protocol versions":
     //   WiFi scan gives channel + auth/encryption mode, NOT 802.11 a/b/g/n/ax.
-    //   BLE advertisements give TX power / service UUIDs / appearance, NOT the
+    //   BT advertisements give TX power / service UUIDs / appearance, NOT the
     //   BT core version. Show what's actually in the scan rather than invent it.
 }
