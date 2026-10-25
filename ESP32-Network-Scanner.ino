@@ -191,12 +191,27 @@ void startScan(Mode mode)
 // ===================================================================
 void scanWifi()
 {
-    // TODO:
-    //   int n = WiFi.scanNetworks();
-    //   for i in 0..n (cap at MAX_RESULTS): fill results[i] with
-    //     WiFi.SSID(i), WiFi.BSSIDstr(i), WiFi.RSSI(i),
-    //     WiFi.channel(i), WiFi.encryptionType(i)
-    //   WiFi.scanDelete();  resultCount = min(n, MAX_RESULTS);
+    int n = WiFi.scanNetworks();
+
+    if (n < 0) n = 0;
+
+    resultCount = (n < MAX_RESULTS) ? n : MAX_RESULTS;   // prevent looping more times than results size.
+
+    for (int i = 0; i < resultCount; i++) {
+        results[i].name       = WiFi.SSID(i);
+        results[i].address    = WiFi.BSSIDstr(i);
+        results[i].rssi       = WiFi.RSSI(i);
+        results[i].channel    = WiFi.channel(i);
+        results[i].encryption = WiFi.encryptionType(i);
+    }
+
+    WiFi.scanDelete();
+
+    // print to serial
+    Serial.printf("found %d networks\n", resultCount);
+    for (int i = 0; i < resultCount; i++)
+        Serial.printf("  %s  %d dBm  ch%d\n",
+                      results[i].name.c_str(), results[i].rssi, results[i].channel);
 }
 
 void scanBt()
